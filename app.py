@@ -155,13 +155,12 @@ else:
     st.warning("⚠️ Low consistency. Let's improve tomorrow!")
 
 # ------------------ RESET MONTH ------------------
-st.divider()
 if st.button("🗑️ Reset Month"):
-    # Reset dataframe
-    df.iloc[:, :] = False
-    df.to_csv(DATA_FILE)
+    # Remove CSV completely
+    if os.path.exists(DATA_FILE):
+        os.remove(DATA_FILE)
 
-    # Clear all session state safely
+    # Clear all widget states
     st.session_state.clear()
 
     st.rerun()
