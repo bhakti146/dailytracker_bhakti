@@ -157,15 +157,11 @@ else:
 # ------------------ RESET MONTH ------------------
 st.divider()
 if st.button("🗑️ Reset Month"):
-    # Reset the dataframe
+    # Reset dataframe
     df.iloc[:, :] = False
     df.to_csv(DATA_FILE)
-    
-    # Reset all checkbox session state values
-    for day in days:
-        for task in tasks:
-            key = f"{day}_{task}"
-            if key in st.session_state:
-                st.session_state[key] = False
-    
+
+    # Clear all session state safely
+    st.session_state.clear()
+
     st.experimental_rerun()
