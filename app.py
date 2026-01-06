@@ -164,4 +164,4 @@ if st.button("🗑️ Reset Month"):
     # Clear all session state safely
     st.session_state.clear()
 
-    st.experimental_rerun()
+    st.rerun()
