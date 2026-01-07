@@ -4,24 +4,34 @@ import os
 from datetime import datetime
 import sqlite3
 
-# Connect to database (only one!)
+# ------------------ DATABASE ------------------
 conn = sqlite3.connect("daily_checklist.db", check_same_thread=False)
 cursor = conn.cursor()
 
-# Create table if not exists (must be before SELECT)
+# Main checklist table
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS checklist (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL,
     day TEXT NOT NULL,
     task TEXT NOT NULL,
-    completed INTEGER DEFAULT 0
+    completed INTEGER DEFAULT 0,
+    UNIQUE(username, day, task)
+)
+""")
+
+# Table for user-created tasks
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS user_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    task TEXT NOT NULL,
+    UNIQUE(username, task)
 )
 """)
 conn.commit()
 
-
-#------------------Users------------------------------
+# ------------------ SESSION STATE ------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
@@ -31,17 +41,24 @@ if "username" not in st.session_state:
 if "reset_version" not in st.session_state:
     st.session_state.reset_version = 0
 
-#------------------------------------------------
-if "reset_version" not in st.session_state:
-    st.session_state.reset_version = 0
-
-
 # ------------------ PAGE CONFIG ------------------
 st.set_page_config(layout="wide")
 st.title("✅ Daily Checklist (30 Days)")
 
-#----------------------------------------------
+# ------------------ LOGIN ------------------
+if not st.session_state.logged_in:
+    st.title("🔐 Login")
+    username = st.text_input("Enter Username")
+    if st.button("Login"):
+        if username.strip() == "":
+            st.warning("Please enter a username")
+        else:
+            st.session_state.logged_in = True
+            st.session_state.username = username.lower()
+            st.rerun()
+    st.stop()
 
+# ------------------ HEADER ------------------
 col1, col2 = st.columns([8, 2])
 col1.subheader(f"👋 Welcome, {st.session_state.username}")
 
@@ -50,7 +67,6 @@ if col2.button("Logout"):
     st.session_state.username = ""
     st.session_state.reset_version += 1
     st.rerun()
-
 
 # ------------------ UI ENHANCEMENT ------------------
 st.markdown("""
@@ -75,80 +91,67 @@ input[type="checkbox"] {
 """, unsafe_allow_html=True)
 
 
+# ------------------ USER TASK MANAGEMENT ------------------
+st.subheader("📝 Your Tasks")
 
-# ------------------ TASK LIST ------------------
-tasks = [
-    "Study",
-    "Exercise",
-    "Data Structure",
-    "Academic Work",
-    "reading",
-    "Screen Time ≤ 1Hour",
-    "Sleep ≤ 6 hrs"
-]
+# Load user tasks
+cursor.execute("SELECT task FROM user_tasks WHERE username=?", (st.session_state.username,))
+tasks = [row[0] for row in cursor.fetchall()]
 
+# ------------------ ADD NEW TASK ------------------
+new_task = st.text_input("Add a new task")
+if st.button("Add Task"):
+    if new_task.strip() != "" and new_task not in tasks:
+        cursor.execute("INSERT INTO user_tasks (username, task) VALUES (?, ?)",
+                       (st.session_state.username, new_task))
+        conn.commit()
+        st.success(f"Task '{new_task}' added!")
+        st.session_state.reset_version += 1
+        st.stop()  # refresh page
+
+# ------------------ DELETE TASK ------------------
+if tasks:
+    st.markdown("---")
+    task_to_delete = st.selectbox("Select a task to delete", options=tasks)
+    if st.button("Delete Task"):
+        if task_to_delete:
+            # Delete from user_tasks table
+            cursor.execute("DELETE FROM user_tasks WHERE username=? AND task=?",
+                           (st.session_state.username, task_to_delete))
+            # Delete from checklist table
+            cursor.execute("DELETE FROM checklist WHERE username=? AND task=?",
+                           (st.session_state.username, task_to_delete))
+            conn.commit()
+            st.success(f"Task '{task_to_delete}' deleted!")
+            st.session_state.reset_version += 1
+            st.stop()  # refresh page
+
+if not tasks:
+    st.info("Add tasks first to start your checklist!")
+    st.stop()
+
+
+# ------------------ TASK LIST & DATAFRAME ------------------
 days = [f"Day {i}" for i in range(1, 31)]
-# ---------- LOAD USER DATA FROM SQLITE ----------
 df = pd.DataFrame(False, index=days, columns=tasks)
 
+# Load saved checklist data
 cursor.execute(
     "SELECT day, task, completed FROM checklist WHERE username=?",
     (st.session_state.username,)
 )
-
 for day, task, completed in cursor.fetchall():
     if day in df.index and task in df.columns:
         df.loc[day, task] = bool(completed)
 
-
-#---------------------------------------------------------------
-#----------------------------------------------------
-if not st.session_state.logged_in:
-    st.title("🔐 Login")
-
-    username = st.text_input("Enter Username")
-
-    if st.button("Login"):
-        if username.strip() == "":
-            st.warning("Please enter a username")
-        else:
-            st.session_state.logged_in = True
-            st.session_state.username = username.lower()
-            st.rerun()
-
-    st.stop()
-
-#---------------------------------------------------------
-conn = sqlite3.connect("daily_checklist.db", check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS checklist (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL,
-    day TEXT NOT NULL,
-    task TEXT NOT NULL,
-    completed INTEGER DEFAULT 0
-)
-""")
-conn.commit()
-
-
-
-
-# ------------------ HEADER ------------------
+# ------------------ CHECKLIST ------------------
 st.subheader("📋 Tick Your Daily Tasks")
 header_cols = st.columns(len(tasks) + 1)
 header_cols[0].write("**Day**")
 for i, task in enumerate(tasks):
     header_cols[i + 1].write(f"**{task}**")
 
-# ------------------ TODAY ------------------
-today_day = f"Day {datetime.now().day}"
-
-
-
-# ------------------ CHECKLIST ------------------
-data_changed = False
+today_day = f"Day {min(datetime.now().day, 30)}"
 
 for day in days:
     row_class = "row-card today-row" if day == today_day else "row-card"
@@ -166,7 +169,6 @@ for day in days:
 
         if new_value != df.loc[day, task]:
             df.loc[day, task] = new_value
-
             cursor.execute("""
                 INSERT OR REPLACE INTO checklist
                 (username, day, task, completed)
@@ -180,9 +182,6 @@ for day in days:
             conn.commit()
 
     st.markdown("</div>", unsafe_allow_html=True)
-
-# ------------------ SAVE ONLY IF CHANGED ------------------
-
 
 # ------------------ ANALYTICS ------------------
 st.divider()
@@ -210,8 +209,6 @@ st.subheader("📅 Weekly Analytics")
 
 df["Date"] = pd.date_range(start=datetime.now().replace(day=1), periods=30)
 df["Weekday"] = pd.to_datetime(df["Date"]).dt.day_name()
-
-
 weekly_progress = df[tasks].groupby(df["Weekday"]).mean().mean(axis=1) * 100
 st.bar_chart(weekly_progress)
 
@@ -241,6 +238,5 @@ if st.button("🗑️ Reset Month"):
         (st.session_state.username,)
     )
     conn.commit()
-
     st.session_state.reset_version += 1
     st.rerun()
