@@ -2,6 +2,24 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime
+import sqlite3
+
+# Connect to database (only one!)
+conn = sqlite3.connect("daily_checklist.db", check_same_thread=False)
+cursor = conn.cursor()
+
+# Create table if not exists (must be before SELECT)
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS checklist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    day TEXT NOT NULL,
+    task TEXT NOT NULL,
+    completed INTEGER DEFAULT 0
+)
+""")
+conn.commit()
+
 
 #------------------Users------------------------------
 if "logged_in" not in st.session_state:
@@ -70,15 +88,17 @@ tasks = [
 ]
 
 days = [f"Day {i}" for i in range(1, 31)]
-DATA_FILE = f"daily_tasks_{st.session_state.username}.csv"
+# ---------- LOAD USER DATA FROM SQLITE ----------
+df = pd.DataFrame(False, index=days, columns=tasks)
 
+cursor.execute(
+    "SELECT day, task, completed FROM checklist WHERE username=?",
+    (st.session_state.username,)
+)
 
-# ------------------ LOAD / CREATE DATA ------------------
-if os.path.exists(DATA_FILE):
-    df = pd.read_csv(DATA_FILE, index_col=0)
-else:
-    df = pd.DataFrame(False, index=days, columns=tasks)
-    df.to_csv(DATA_FILE)
+for day, task, completed in cursor.fetchall():
+    if day in df.index and task in df.columns:
+        df.loc[day, task] = bool(completed)
 
 
 #---------------------------------------------------------------
@@ -97,6 +117,21 @@ if not st.session_state.logged_in:
             st.rerun()
 
     st.stop()
+
+#---------------------------------------------------------
+conn = sqlite3.connect("daily_checklist.db", check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS checklist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    day TEXT NOT NULL,
+    task TEXT NOT NULL,
+    completed INTEGER DEFAULT 0
+)
+""")
+conn.commit()
+
 
 
 
@@ -131,13 +166,23 @@ for day in days:
 
         if new_value != df.loc[day, task]:
             df.loc[day, task] = new_value
-            data_changed = True
+
+            cursor.execute("""
+                INSERT OR REPLACE INTO checklist
+                (username, day, task, completed)
+                VALUES (?, ?, ?, ?)
+            """, (
+                st.session_state.username,
+                day,
+                task,
+                int(new_value)
+            ))
+            conn.commit()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------ SAVE ONLY IF CHANGED ------------------
-if data_changed:
-    df.to_csv(DATA_FILE)
+
 
 # ------------------ ANALYTICS ------------------
 st.divider()
@@ -164,7 +209,8 @@ st.divider()
 st.subheader("📅 Weekly Analytics")
 
 df["Date"] = pd.date_range(start=datetime.now().replace(day=1), periods=30)
-df["Weekday"] = df["Date"].dt.day_name()
+df["Weekday"] = pd.to_datetime(df["Date"]).dt.day_name()
+
 
 weekly_progress = df[tasks].groupby(df["Weekday"]).mean().mean(axis=1) * 100
 st.bar_chart(weekly_progress)
@@ -190,8 +236,11 @@ st.write(f"⚠️ **Bad Day:** {bad_day}")
 
 # ------------------ RESET MONTH ------------------
 if st.button("🗑️ Reset Month"):
-    if os.path.exists(DATA_FILE):
-        os.remove(DATA_FILE)
+    cursor.execute(
+        "DELETE FROM checklist WHERE username=?",
+        (st.session_state.username,)
+    )
+    conn.commit()
 
     st.session_state.reset_version += 1
     st.rerun()
