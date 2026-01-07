@@ -3,26 +3,42 @@ import pandas as pd
 import os
 from datetime import datetime
 
+#------------------Users------------------------------
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if "username" not in st.session_state:
+    st.session_state.username = ""
+
+if "reset_version" not in st.session_state:
+    st.session_state.reset_version = 0
+
+#------------------------------------------------
+if "reset_version" not in st.session_state:
+    st.session_state.reset_version = 0
+
+
 # ------------------ PAGE CONFIG ------------------
 st.set_page_config(layout="wide")
 st.title("✅ Daily Checklist (30 Days)")
 
-# ------------------ UI ENHANCEMENT (CSS ONLY – SAFE) ------------------
+#----------------------------------------------
+
+col1, col2 = st.columns([8, 2])
+col1.subheader(f"👋 Welcome, {st.session_state.username}")
+
+if col2.button("Logout"):
+    st.session_state.logged_in = False
+    st.session_state.username = ""
+    st.session_state.reset_version += 1
+    st.rerun()
+
+
+# ------------------ UI ENHANCEMENT ------------------
 st.markdown("""
 <style>
-
-/* Main background */
-.main {
-    background-color: #f7f9fc;
-}
-
-/* Title */
-h1 {
-    color: #2c3e50;
-    font-weight: 700;
-}
-
-/* Row card */
+.main { background-color: #f7f9fc; }
+h1 { color: #2c3e50; font-weight: 700; }
 .row-card {
     background: white;
     padding: 10px 12px;
@@ -30,55 +46,17 @@ h1 {
     margin-bottom: 10px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.05);
 }
-
-/* Highlight today's row */
 .today-row {
     background: linear-gradient(90deg, #e3f2fd, #ffffff);
     border-left: 6px solid #2196f3;
 }
-
-/* Checkbox scaling */
 input[type="checkbox"] {
     transform: scale(1.2);
-    cursor: pointer;
 }
-
-/* Buttons */
-.stButton > button {
-    background-color: #ff4b4b;
-    color: white;
-    border-radius: 10px;
-    padding: 8px 16px;
-    font-weight: 600;
-}
-
-.stButton > button:hover {
-    background-color: #ff2e2e;
-}
-
-/* Progress bar */
-div[data-testid="stProgress"] > div {
-    height: 16px;
-    border-radius: 10px;
-}
-
-/* Metric card */
-[data-testid="stMetric"] {
-    background: white;
-    padding: 16px;
-    border-radius: 14px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-}
-
-/* Divider */
-hr {
-    border: none;
-    height: 2px;
-    background: linear-gradient(to right, #4facfe, #00f2fe);
-}
-
 </style>
 """, unsafe_allow_html=True)
+
+
 
 # ------------------ TASK LIST ------------------
 tasks = [
@@ -91,50 +69,77 @@ tasks = [
     "Sleep ≤ 6 hrs"
 ]
 
-# ------------------ DATA SETUP ------------------
 days = [f"Day {i}" for i in range(1, 31)]
-DATA_FILE = "daily_tasks.csv"
+DATA_FILE = f"daily_tasks_{st.session_state.username}.csv"
 
+
+# ------------------ LOAD / CREATE DATA ------------------
 if os.path.exists(DATA_FILE):
     df = pd.read_csv(DATA_FILE, index_col=0)
 else:
     df = pd.DataFrame(False, index=days, columns=tasks)
     df.to_csv(DATA_FILE)
 
-# ------------------ TABLE HEADER ------------------
-st.subheader("📋 Tick Your Daily Tasks")
 
+#---------------------------------------------------------------
+#----------------------------------------------------
+if not st.session_state.logged_in:
+    st.title("🔐 Login")
+
+    username = st.text_input("Enter Username")
+
+    if st.button("Login"):
+        if username.strip() == "":
+            st.warning("Please enter a username")
+        else:
+            st.session_state.logged_in = True
+            st.session_state.username = username.lower()
+            st.rerun()
+
+    st.stop()
+
+
+
+# ------------------ HEADER ------------------
+st.subheader("📋 Tick Your Daily Tasks")
 header_cols = st.columns(len(tasks) + 1)
 header_cols[0].write("**Day**")
 for i, task in enumerate(tasks):
     header_cols[i + 1].write(f"**{task}**")
 
-# ------------------ TODAY LOGIC ------------------
+# ------------------ TODAY ------------------
 today_day = f"Day {datetime.now().day}"
 
-# ------------------ CHECKLIST TABLE ------------------
+
+
+# ------------------ CHECKLIST ------------------
+data_changed = False
+
 for day in days:
     row_class = "row-card today-row" if day == today_day else "row-card"
-
     st.markdown(f'<div class="{row_class}">', unsafe_allow_html=True)
-
-    row_cols = st.columns(len(tasks) + 1)
-    row_cols[0].write("⭐ " + day if day == today_day else day)
+    cols = st.columns(len(tasks) + 1)
+    cols[0].write("⭐ " + day if day == today_day else day)
 
     for i, task in enumerate(tasks):
-        key = f"{day}_{task}"
-        df.loc[day, task] = row_cols[i + 1].checkbox(
+        key = f"{day}_{task}_{st.session_state.reset_version}"
+        new_value = cols[i + 1].checkbox(
             "",
-            value=df.loc[day, task],
+            value=bool(df.loc[day, task]),
             key=key
         )
 
+        if new_value != df.loc[day, task]:
+            df.loc[day, task] = new_value
+            data_changed = True
+
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ------------------ SAVE DATA ------------------
-df.to_csv(DATA_FILE)
+# ------------------ SAVE ONLY IF CHANGED ------------------
+if data_changed:
+    df.to_csv(DATA_FILE)
 
-# ------------------ ANALYZER ------------------
+# ------------------ ANALYTICS ------------------
 st.divider()
 st.subheader("📊 Progress Analyzer")
 
@@ -154,13 +159,39 @@ elif progress >= 50:
 else:
     st.warning("⚠️ Low consistency. Let's improve tomorrow!")
 
+# ------------------ WEEKLY ANALYTICS ------------------
+st.divider()
+st.subheader("📅 Weekly Analytics")
+
+df["Date"] = pd.date_range(start=datetime.now().replace(day=1), periods=30)
+df["Weekday"] = df["Date"].dt.day_name()
+
+weekly_progress = df[tasks].groupby(df["Weekday"]).mean().mean(axis=1) * 100
+st.bar_chart(weekly_progress)
+
+# ------------------ MONTHLY ANALYTICS ------------------
+st.divider()
+st.subheader("🗓️ Monthly Analytics")
+
+df["Daily %"] = (df[tasks].sum(axis=1) / len(tasks)) * 100
+perfect_days = (df["Daily %"] == 100).sum()
+average_daily = df["Daily %"].mean()
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Total Days", len(df))
+col2.metric("Perfect Days 🔥", perfect_days)
+col3.metric("Avg Daily Consistency", f"{average_daily:.2f}%")
+
+# ------------------ BEST & BAD DAY ------------------
+best_day = df["Daily %"].idxmax()
+bad_day = df["Daily %"].idxmin()
+st.write(f"⭐ **Best Day:** {best_day}")
+st.write(f"⚠️ **Bad Day:** {bad_day}")
+
 # ------------------ RESET MONTH ------------------
 if st.button("🗑️ Reset Month"):
-    # Remove CSV completely
     if os.path.exists(DATA_FILE):
         os.remove(DATA_FILE)
 
-    # Clear all widget states
-    st.session_state.clear()
-
+    st.session_state.reset_version += 1
     st.rerun()
